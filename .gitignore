@@ -31,3 +31,8 @@ _local_backups/
 # --- OS/editor ---
 .DS_Store
 Thumbs.db
+
+# --- additional backup naming patterns ---
+*.bak_*
+*.bak_warn_*
+*.good.txt
