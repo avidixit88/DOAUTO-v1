@@ -15,8 +15,6 @@ from auto_exec import reconcile_and_execute, try_send_entries, AutoExecConfig
 
 CFG_PATH = os.getenv("ZTOCKLY_RUNTIME_CONFIG_PATH", "/state/runtime_config.json")
 LP_CACHE_PATH = os.getenv("ZTOCKLY_LP_CACHE_PATH", "/state/last_price_cache.json")
-RESULTS_PATH = os.getenv("ZTOCKLY_RESULTS_PATH", "/state/last_results.json")
-HEARTBEAT_PATH = os.getenv("ZTOCKLY_HEARTBEAT_PATH", "/state/runner_heartbeat.json")
 DEFAULT_INTERVAL = float(os.getenv("RUNNER_INTERVAL_SECONDS", "45"))
 
 def _lp_key(sym: str) -> str:
@@ -39,57 +37,6 @@ def _atomic_write_json(path: str, data: Dict[str, Any]) -> None:
         os.replace(tmp, path)
     except Exception:
         pass
-
-
-def _json_sanitize(obj: Any, depth: int = 0, max_depth: int = 6) -> Any:
-    """Make objects JSON-safe (no numpy scalars, no datetimes, no dataclasses)."""
-    if depth > max_depth:
-        return str(obj)
-    if obj is None or isinstance(obj, (str, int, float, bool)):
-        return obj
-    # dataclasses
-    try:
-        from dataclasses import asdict, is_dataclass
-        if is_dataclass(obj):
-            return _json_sanitize(asdict(obj), depth + 1, max_depth)
-    except Exception:
-        pass
-    # dict / list
-    if isinstance(obj, dict):
-        return {str(k): _json_sanitize(v, depth + 1, max_depth) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple, set)):
-        return [_json_sanitize(v, depth + 1, max_depth) for v in list(obj)]
-    # numpy / pandas
-    try:
-        import numpy as np
-        import pandas as pd
-        if isinstance(obj, (np.integer,)):
-            return int(obj)
-        if isinstance(obj, (np.floating,)):
-            return float(obj)
-        if isinstance(obj, (pd.Timestamp,)):
-            return str(obj)
-    except Exception:
-        pass
-    # to_dict fallback
-    if hasattr(obj, "to_dict"):
-        try:
-            return _json_sanitize(obj.to_dict(), depth + 1, max_depth)
-        except Exception:
-            pass
-    if hasattr(obj, "__dict__"):
-        try:
-            return _json_sanitize(dict(obj.__dict__), depth + 1, max_depth)
-        except Exception:
-            pass
-    return str(obj)
-
-def _write_heartbeat(status: str, extra: Dict[str, Any] | None = None) -> None:
-    hb = {"ts": time.time(), "status": status}
-    if extra:
-        hb.update(_json_sanitize(extra))
-    _atomic_write_json(HEARTBEAT_PATH, hb)
-
 
 def _load_lp_cache() -> Dict[str, float]:
     d = _load_json(LP_CACHE_PATH)
@@ -125,14 +72,6 @@ def main():
         t0 = time.time()
         try:
             cfg = _load_json(CFG_PATH)
-
-            # heartbeat + operator pause
-            _write_heartbeat('running', {'phase': 'loaded_cfg'})
-            if bool(cfg.get('runner_paused', False)):
-                _write_heartbeat('paused', {'note': 'runner_paused=true'})
-                time.sleep(2.0)
-                continue
-
 
             symbols = [s for s in (cfg.get("symbols") or []) if isinstance(s, str) and s.strip()]
             if not symbols:
@@ -226,7 +165,6 @@ def main():
             dt = time.time() - t0
             interval_sec = float(cfg.get("runner_interval_seconds") or DEFAULT_INTERVAL)
             sleep_for = max(1.0, interval_sec - dt)
-            _write_heartbeat('ok', {'scan_dt': dt, 'symbols': len(symbols), 'lp_updates': updated})
             print(f"[runner] ok syms={len(symbols)} scan_dt={dt:.2f}s lp_updates={updated} sleep={sleep_for:.1f}s")
             time.sleep(sleep_for)
 

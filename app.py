@@ -65,16 +65,6 @@ def _persist_runtime_config(payload: dict) -> None:
         _os.replace(tmp, path)
     except Exception:
         pass
-
-
-def _read_runner_json(path: str) -> dict:
-    try:
-        with open(path, 'r') as f:
-            d = json.load(f)
-        return d if isinstance(d, dict) else {}
-    except Exception:
-        return {}
-
 import math as _math
 import datetime as _dt
 
@@ -302,8 +292,6 @@ if "heavenly_symbol_state" not in st.session_state:
     st.session_state.heavenly_symbol_state = {}
 
 st.sidebar.title("Scalping Scanner")
-runner_only_mode = st.sidebar.toggle("Runner-only mode (recommended)", value=True, help="ON: background runner scans + executes; Streamlit only writes config + reads runner outputs.")
-
 watchlist_text = st.sidebar.text_area("Watchlist (comma or newline separated)", value="\n".join(st.session_state.watchlist), height=150)
 
 interval = st.sidebar.selectbox("Intraday interval", ["1min", "5min"], index=0)
@@ -897,45 +885,6 @@ st.sidebar.caption("Required env var: ALPHAVANTAGE_API_KEY")
 symbols = [s.strip().upper() for s in watchlist_text.replace(",", "\n").splitlines() if s.strip()]
 st.session_state.watchlist = symbols
 
-# --- Persist UI runtime settings for background runner ---
-try:
-    from dataclasses import asdict as _asdict
-    _aecfg = _get_autoexec_cfg()
-    cfg_payload = {
-        "runner_only_mode": bool(runner_only_mode),
-        "symbols": symbols,
-        "interval": interval,
-        "mode": mode,
-        "pro_mode": pro_mode,
-        "allow_opening": allow_opening,
-        "allow_midday": allow_midday,
-        "allow_power": allow_power,
-        "allow_premarket": allow_premarket,
-        "allow_afterhours": allow_afterhours,
-        "use_last_closed_only": use_last_closed_only,
-        "bar_closed_guard": bar_closed_guard,
-        "vwap_logic": vwap_logic,
-        "session_vwap_include_premarket": session_vwap_include_premarket,
-        "killzone_preset": killzone_preset,
-        "liquidity_weighting": liquidity_weighting,
-        "orb_minutes": orb_minutes,
-        "fib_lookback_bars": fib_lookback_bars,
-        "enable_htf_bias": enable_htf_bias,
-        "htf_interval": htf_interval,
-        "htf_strict": htf_strict,
-        "entry_model": entry_model,
-        "slippage_mode": slip_mode,
-        "fixed_slippage_cents": slip_fixed_cents,
-        "atr_fraction_slippage": slip_atr_frac,
-        "target_atr_pct": target_atr_pct,
-        "runner_interval_seconds": (refresh_seconds if auto_refresh else None),
-        "autoexec_cfg": (_asdict(_aecfg) if _aecfg is not None else {"enabled": False}),
-    }
-    _persist_runtime_config(cfg_payload)
-except Exception:
-    pass
-
-
 st.title("Ztockly — Intraday Reversal Scalping Engine (v7)")
 st.caption("Basic: VWAP + RSI‑5 event + MACD histogram turn + volume. Pro adds sweeps/OB/breaker/FVG/EMA. v7 adds fib‑anchored TPs, liquidity‑weighted scoring, ATR score normalization, and optional HTF bias.")
 
@@ -1147,31 +1096,9 @@ def run_scan():
 
 
 with tab_scan:
-    # Runner outputs (read-only)
-    if runner_only_mode:
-        hb = _read_runner_json(os.getenv('ZTOCKLY_HEARTBEAT_PATH', '/state/runner_heartbeat.json'))
-        lr = _read_runner_json(os.getenv('ZTOCKLY_RESULTS_PATH', '/state/last_results.json'))
-        c1, c2, c3 = st.columns([2,2,6])
-        with c1:
-            st.metric('Runner status', hb.get('status','unknown'))
-        with c2:
-            ts = hb.get('ts') or lr.get('ts')
-            try:
-                st.metric('Last update (epoch)', int(ts) if ts else 0)
-            except Exception:
-                st.metric('Last update', str(ts) if ts else 'n/a')
-        with c3:
-            st.write('')
-        if lr:
-            st.session_state['last_results'] = lr
-
     col_a, col_b, col_c, col_d = st.columns([1, 1, 2, 1])
     with col_a:
-        scan_now = (False if runner_only_mode else st.button("Scan Watchlist", type="primary"))
-        if runner_only_mode:
-            st.caption("Runner-only mode is ON: scanning + auto-exec happen in runner.py. This UI only writes config + reads runner outputs.")
-            if st.button("Force UI refresh", use_container_width=True):
-                st.rerun()
+        scan_now = st.button("Scan Watchlist", type="primary")
     with col_b:
         if st.button("Capture test alert", use_container_width=True):
             test = {

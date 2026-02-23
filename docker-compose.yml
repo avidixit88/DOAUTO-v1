@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  ui:
+    build: .
+    container_name: ztockly_ui
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      - /root/.streamlit:/root/.streamlit
+      - /opt/ztockly/state:/state
+    restart: unless-stopped
+
+  runner:
+    build: .
+    container_name: ztockly_runner
+    env_file:
+      - .env
+    environment:
+      - ZTOCKLY_HEADLESS=1
+    volumes:
+      - /root/.streamlit:/root/.streamlit
+      - /opt/ztockly/state:/state
+    command: ["python", "runner.py"]
+    restart: unless-stopped
