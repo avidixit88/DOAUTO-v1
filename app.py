@@ -2,6 +2,22 @@ import time
 import os
 
 RUNNER_ENABLED = os.getenv("RUNNER_ENABLED", "1").lower() in ("1","true","yes","on")
+
+def _read_state_json(path: str, default):
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+RESULTS_REV_PATH      = os.getenv("RESULTS_REV_PATH",      "/state/last_results_rev.json")
+RESULTS_RIDE_PATH     = os.getenv("RESULTS_RIDE_PATH",     "/state/last_results_ride.json")
+RESULTS_SWING_PATH    = os.getenv("RESULTS_SWING_PATH",    "/state/last_results_swing.json")
+RESULTS_MSS_PATH      = os.getenv("RESULTS_MSS_PATH",      "/state/last_results_mss.json")
+RESULTS_HEAVENLY_PATH = os.getenv("RESULTS_HEAVENLY_PATH", "/state/last_results_heavenly.json")
+HEARTBEAT_PATH        = os.getenv("HEARTBEAT_PATH",        "/state/runner_heartbeat.json")
+
+
 import json
 import pandas as pd
 import numpy as np
@@ -1150,6 +1166,21 @@ with tab_scan:
     results_swing = st.session_state.get("last_results_swing", [])
     results_mss = st.session_state.get("last_results_mss", [])
     results_heavenly = st.session_state.get("last_results_heavenly", [])
+
+    # Runner mode: read results produced by runner service (no compute in Streamlit).
+    if RUNNER_ENABLED:
+        results_rev = _read_state_json(RESULTS_REV_PATH, [])
+        results_ride = _read_state_json(RESULTS_RIDE_PATH, [])
+        results_swing = _read_state_json(RESULTS_SWING_PATH, [])
+        results_mss = _read_state_json(RESULTS_MSS_PATH, [])
+        results_heavenly = _read_state_json(RESULTS_HEAVENLY_PATH, [])
+
+        hb = _read_state_json(HEARTBEAT_PATH, {})
+        if isinstance(hb, dict) and hb.get("ts"):
+            try:
+                st.caption(f"Runner heartbeat: {hb.get('ts'):.0f}  | syms={hb.get('syms')}  | scan_dt={hb.get('scan_dt')}")
+            except Exception:
+                pass
 
     # Session-state may store results as plain dicts (v5.9.3+). Convert back to attribute-style objects
     # so downstream code paths (alerts, UI helpers) remain unchanged.

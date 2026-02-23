@@ -15,6 +15,15 @@ from auto_exec import reconcile_and_execute, try_send_entries, AutoExecConfig
 
 CFG_PATH = os.getenv("ZTOCKLY_RUNTIME_CONFIG_PATH", "/state/runtime_config.json")
 LP_CACHE_PATH = os.getenv("ZTOCKLY_LP_CACHE_PATH", "/state/last_price_cache.json")
+
+RESULTS_REV_PATH      = os.getenv("RESULTS_REV_PATH",      "/state/last_results_rev.json")
+RESULTS_RIDE_PATH     = os.getenv("RESULTS_RIDE_PATH",     "/state/last_results_ride.json")
+RESULTS_SWING_PATH    = os.getenv("RESULTS_SWING_PATH",    "/state/last_results_swing.json")
+RESULTS_MSS_PATH      = os.getenv("RESULTS_MSS_PATH",      "/state/last_results_mss.json")
+RESULTS_HEAVENLY_PATH = os.getenv("RESULTS_HEAVENLY_PATH", "/state/last_results_heavenly.json")
+HEARTBEAT_PATH        = os.getenv("HEARTBEAT_PATH",        "/state/runner_heartbeat.json")
+
+
 DEFAULT_INTERVAL = float(os.getenv("RUNNER_INTERVAL_SECONDS", "45"))
 
 def _lp_key(sym: str) -> str:
@@ -48,8 +57,56 @@ def _load_lp_cache() -> Dict[str, float]:
             pass
     return out
 
+def _result_to_dict(x):
+    # Convert result objects (SimpleNamespace/dataclass) to plain dict for JSON.
+    if x is None:
+        return None
+    if isinstance(x, dict):
+        return x
+    d = {}
+    for k in dir(x):
+        if k.startswith("_"):
+            continue
+        try:
+            v = getattr(x, k)
+        except Exception:
+            continue
+        if callable(v):
+            continue
+        try:
+            json.dumps(v)
+            d[k] = v
+        except Exception:
+            # best effort stringify
+            d[k] = str(v)
+    return d
+
+
+
 def _save_lp_cache(cache: Dict[str, float]) -> None:
     _atomic_write_json(LP_CACHE_PATH, cache)
+
+    # --- Persist runner outputs for Streamlit (runner-only architecture) ---
+    try:
+        _atomic_write_json(RESULTS_REV_PATH,      [_result_to_dict(x) for x in (results_rev or [])])
+        _atomic_write_json(RESULTS_RIDE_PATH,     [_result_to_dict(x) for x in (results_ride or [])])
+        _atomic_write_json(RESULTS_SWING_PATH,    [_result_to_dict(x) for x in (results_swing or [])])
+        _atomic_write_json(RESULTS_MSS_PATH,      [_result_to_dict(x) for x in (results_mss or [])])
+        # Heavenly optional (if your runner computes it later; safe to write empty for now)
+        if 'results_heavenly' in locals():
+            _atomic_write_json(RESULTS_HEAVENLY_PATH, [_result_to_dict(x) for x in (results_heavenly or [])])
+    except Exception:
+        pass
+
+    try:
+        _atomic_write_json(HEARTBEAT_PATH, {
+            "ts": time.time(),
+            "syms": int(len(symbols or [])) if 'symbols' in locals() else None,
+            "scan_dt": float(scan_dt) if 'scan_dt' in locals() else None,
+        })
+    except Exception:
+        pass
+
 
 def _build_autoexec_cfg(cfg: Dict[str, Any]) -> AutoExecConfig | None:
     ae = cfg.get("autoexec_cfg")
