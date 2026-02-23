@@ -1,5 +1,7 @@
 import time
 import os
+
+RUNNER_ENABLED = os.getenv("RUNNER_ENABLED", "1").lower() in ("1","true","yes","on")
 import json
 import pandas as pd
 import numpy as np
@@ -1066,6 +1068,12 @@ def run_scan():
             })
         except Exception:
             pass
+        if RUNNER_ENABLED:
+
+            # Runner owns scanning
+
+            return [], [], [], []
+
         return scan_watchlist_quad(
             client, symbols,
             interval=interval,
@@ -1155,123 +1163,135 @@ with tab_scan:
         results_mss = [_maybe_ns(x) for x in (results_mss or [])]
     except Exception:
         pass
+
     if scan_now or auto_refresh:
-        # --- Auto-exec reconciliation (does not affect engine logic) ---
-        try:
-            _aecfg = _get_autoexec_cfg()
-            if _aecfg is not None and getattr(_aecfg, "enabled", False):
-                # Decide whether we need a quote client at all.
-                _need_quote_client = (not getattr(_aecfg, "entry_use_last_price_cache_only", False)) or (not getattr(_aecfg, "reconcile_use_last_price_cache_only", True))
-                _px_client = AlphaVantageClient() if _need_quote_client else None
+        # --- Runner-only architecture ---
+        # When RUNNER_ENABLED is true, Streamlit must not scan, fetch, reconcile, or place orders.
+        if not RUNNER_ENABLED:
+            # --- Auto-exec reconciliation (legacy UI mode only) ---
+            try:
+                _aecfg = _get_autoexec_cfg()
+                if _aecfg is not None and getattr(_aecfg, "enabled", False):
+                    _need_quote_client = (
+                        (not getattr(_aecfg, "entry_use_last_price_cache_only", False))
+                        or (not getattr(_aecfg, "reconcile_use_last_price_cache_only", True))
+                    )
+                    _px_client = AlphaVantageClient() if _need_quote_client else None
 
-                def _fetch_last_cache_only(sym: str):
-                    return _lp_cache().get(_lp_key(sym))
+                    def _fetch_last_cache_only(sym: str):
+                        return _lp_cache().get(_lp_key(sym))
 
-                # Optional fresh-quote fallback (used only if enabled).
-                def _fetch_last_with_fallback(sym: str):
-                    if _px_client is not None:
-                        q = _px_client.fetch_quote(sym)
-                        if q is not None:
-                            return q
-                    return _fetch_last_cache_only(sym)
-
-                # For ENTRY evaluation we optionally use cached LAST only (no in-between quote fetches).
-                def _fetch_last_for_entry(sym: str):
-                    if getattr(_aecfg, "entry_use_last_price_cache_only", False):
+                    def _fetch_last_with_fallback(sym: str):
+                        if _px_client is not None:
+                            q = _px_client.fetch_quote(sym)
+                            if q is not None:
+                                return q
                         return _fetch_last_cache_only(sym)
-                    return _fetch_last_with_fallback(sym)
 
-                # For reconciliation we optionally force cache-only LAST to avoid extra quote calls.
-                def _fetch_last_for_reconcile(sym: str):
-                    if getattr(_aecfg, "reconcile_use_last_price_cache_only", True):
-                        return _fetch_last_cache_only(sym)
-                    return _fetch_last_with_fallback(sym)
+                    def _fetch_last_for_entry(sym: str):
+                        if getattr(_aecfg, "entry_use_last_price_cache_only", False):
+                            return _fetch_last_cache_only(sym)
+                        return _fetch_last_with_fallback(sym)
 
-                reconcile_and_execute(
-                    _aecfg,
-                    allow_premarket,
-                    allow_opening,
-                    allow_midday,
-                    allow_powerhour,
-                    allow_afterhours,
-                    _fetch_last_for_reconcile,
-                )
-                # Place entries for already-staged lifecycles (pre-scan pass)
-                try_send_entries(_aecfg, allow_opening, allow_midday, allow_powerhour, _fetch_last_for_entry)
-        except Exception as _e:
-            # Never crash the app because of auto-exec; surface in sidebar via Streamlit logs
-            st.sidebar.warning(f"Auto-exec warning: {_e}")
+                    def _fetch_last_for_reconcile(sym: str):
+                        if getattr(_aecfg, "reconcile_use_last_price_cache_only", True):
+                            return _fetch_last_cache_only(sym)
+                        return _fetch_last_with_fallback(sym)
 
+                    reconcile_and_execute(
+                        _aecfg,
+                        allow_premarket,
+                        allow_opening,
+                        allow_midday,
+                        allow_powerhour,
+                        allow_afterhours,
+                        _fetch_last_for_reconcile,
+                    )
+
+                    # Pre-scan pass: place entries for already-staged lifecycles
+                    try_send_entries(
+                        _aecfg,
+                        allow_opening,
+                        allow_midday,
+                        allow_powerhour,
+                        _fetch_last_for_entry,
+                    )
+            except Exception as _e:
+                st.sidebar.warning(f"Auto-exec warning: {_e}")
+
+        # --- Scan (runner mode returns empty; standalone computes locally) ---
         results_rev, results_ride, results_swing, results_mss = run_scan()
         st.session_state["last_results_rev"] = [_result_to_dict(x) for x in (results_rev or [])]
         st.session_state["last_results_ride"] = [_result_to_dict(x) for x in (results_ride or [])]
         st.session_state["last_results_swing"] = [_result_to_dict(x) for x in (results_swing or [])]
         st.session_state["last_results_mss"] = [_result_to_dict(x) for x in (results_mss or [])]
 
-        # Update last-price cache from scan results (used by auto-exec fallback pricing).
-        try:
-            _cache = _lp_cache()
-            for _r in (list(results_rev or []) + list(results_ride or []) + list(results_swing or []) + list(results_mss or [])):
-                sym = None
-                last = None
-                # Result objects use last_price (not last). Dict hydration may vary.
-                if isinstance(_r, dict):
-                    sym = _r.get("symbol")
-                    last = _r.get("last_price")
-                    if last is None:
-                        last = _r.get("last")
-                else:
-                    sym = getattr(_r, "symbol", None)
-                    last = getattr(_r, "last_price", None)
-                    if last is None:
-                        last = getattr(_r, "last", None)
-                if sym and last is not None:
-                    # Accept floats/ints and numeric strings; ignore non-numeric values (e.g., "N/A").
-                    try:
-                        _v = None
-                        if isinstance(last, (int, float)):
-                            _v = float(last)
-                        else:
-                            _s = str(last).strip()
-                            if _s and _s.lower() not in ("nan", "none", "null", "n/a", "na", "inf", "-inf", "+inf"):
+        # UI-side cache writes / post-scan entry placement must be disabled in runner mode.
+        if not RUNNER_ENABLED:
+            # Update last-price cache from scan results (used by auto-exec fallback pricing).
+            try:
+                _cache = _lp_cache()
+                for _r in (list(results_rev or []) + list(results_ride or []) + list(results_swing or []) + list(results_mss or [])):
+                    sym = None
+                    last = None
+                    if isinstance(_r, dict):
+                        sym = _r.get("symbol")
+                        last = _r.get("last_price")
+                        if last is None:
+                            last = _r.get("last")
+                    else:
+                        sym = getattr(_r, "symbol", None)
+                        last = getattr(_r, "last_price", None)
+                        if last is None:
+                            last = getattr(_r, "last", None)
+
+                    if sym and last is not None:
+                        try:
+                            if isinstance(last, (int, float)):
+                                _v = float(last)
+                            else:
+                                _s = str(last).strip()
+                                if not _s or _s.lower() in ("nan","none","null","n/a","na","inf","-inf","+inf"):
+                                    continue
                                 _v = float(_s)
-                        if _v is not None and (not _math.isnan(_v)) and (not _math.isinf(_v)):
-                            _cache[_lp_key(sym)] = _v
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+                            if (not _math.isnan(_v)) and (not _math.isinf(_v)):
+                                _cache[_lp_key(sym)] = _v
+                        except Exception:
+                            pass
+            except Exception:
+                pass
 
-        # IMPORTANT: run try_send_entries AGAIN after the scan, because staging happens during
-        # scan execution. This ensures "Immediate on stage" can actually place the entry order
-        # on the same rerun as the alert is staged.
-        try:
-            _aecfg = _get_autoexec_cfg()
-            if _aecfg is not None and getattr(_aecfg, "enabled", False):
-                _need_quote_client = not getattr(_aecfg, "entry_use_last_price_cache_only", False)
-                _px_client = AlphaVantageClient() if _need_quote_client else None
+            # IMPORTANT: run try_send_entries AGAIN after the scan (staging occurs during scan execution).
+            try:
+                _aecfg = _get_autoexec_cfg()
+                if _aecfg is not None and getattr(_aecfg, "enabled", False):
+                    _need_quote_client = not getattr(_aecfg, "entry_use_last_price_cache_only", False)
+                    _px_client = AlphaVantageClient() if _need_quote_client else None
 
-                def _fetch_last_cache_only(sym: str):
-                    return _lp_cache().get(_lp_key(sym))
+                    def _fetch_last_cache_only(sym: str):
+                        return _lp_cache().get(_lp_key(sym))
 
-                def _fetch_last_with_fallback(sym: str):
-                    if _px_client is not None:
-                        q = _px_client.fetch_quote(sym)
-                        if q is not None:
-                            return q
-                    return _fetch_last_cache_only(sym)
-
-                def _fetch_last_for_entry(sym: str):
-                    if getattr(_aecfg, "entry_use_last_price_cache_only", False):
+                    def _fetch_last_with_fallback(sym: str):
+                        if _px_client is not None:
+                            q = _px_client.fetch_quote(sym)
+                            if q is not None:
+                                return q
                         return _fetch_last_cache_only(sym)
-                    return _fetch_last_with_fallback(sym)
 
-                try_send_entries(_aecfg, allow_opening, allow_midday, allow_powerhour, _fetch_last_for_entry)
-        except Exception:
-            pass
+                    def _fetch_last_for_entry(sym: str):
+                        if getattr(_aecfg, "entry_use_last_price_cache_only", False):
+                            return _fetch_last_cache_only(sym)
+                        return _fetch_last_with_fallback(sym)
+
+                    try_send_entries(_aecfg, allow_opening, allow_midday, allow_powerhour, _fetch_last_for_entry)
+            except Exception:
+                pass
+
+
+
 
         # HEAVENLY: computed separately so it cannot affect other engines' logic.
-        if enable_heavenly:
+        if enable_heavenly and (not RUNNER_ENABLED):
             now_ts = time.time()
             htf_interval = "30min" if heavenly_htf == "30min" else "60min"
 
@@ -2109,8 +2129,22 @@ with tab_scan:
         st.subheader("Chart & Signal Detail")
         pick = st.selectbox("Select ticker", [_getf(r, "symbol") for r in results_rev], index=0)
 
-        with st.spinner(f"Loading chart data for {pick}..."):
-            ohlcv, rsi5, rsi14, macd_hist, quote = fetch_bundle(client, pick, interval=interval)
+        if RUNNER_ENABLED:
+
+
+            st.info("Chart data computation is disabled in UI while runner is enabled.")
+
+
+            ohlcv = rsi5 = rsi14 = macd_hist = quote = None
+
+
+        else:
+
+
+            with st.spinner(f"Loading chart data for {pick}..."):
+
+
+                ohlcv, rsi5, rsi14, macd_hist, quote = fetch_bundle(client, pick, interval=interval)
 
         sig = compute_scalp_signal(
             pick, ohlcv, rsi5, rsi14, macd_hist,
