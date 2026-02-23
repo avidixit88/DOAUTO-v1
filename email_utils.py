@@ -21,6 +21,35 @@ def send_email_alert(
     if not recipients:
         return
 
+    # ---- Prefer SendGrid Web API if configured ----
+    import os
+
+    sg_key = (os.environ.get("SENDGRID_API_KEY") or "").strip()
+    sg_from = (os.environ.get("SENDGRID_FROM_EMAIL") or "").strip()
+
+    if sg_key and sg_from:
+        try:
+            from sendgrid import SendGridAPIClient
+            from sendgrid.helpers.mail import Mail, Email, To
+
+            message = Mail(
+                from_email=Email(sg_from),
+                to_emails=[To(r) for r in recipients],
+                subject=str(subject),
+                plain_text_content=str(body or ""),
+            )
+
+            sg = SendGridAPIClient(sg_key)
+            resp = sg.send(message)
+
+            # 202 = accepted (normal SendGrid success)
+            if getattr(resp, "status_code", None) in (200, 202):
+                return
+            # else fall through to SMTP
+        except Exception:
+            # Any SendGrid failure → fall back to SMTP
+            pass
+
     with smtplib.SMTP(smtp_server, smtp_port, timeout=20) as server:
         server.starttls()
         server.login(smtp_user, smtp_password)

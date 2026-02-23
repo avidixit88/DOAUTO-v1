@@ -24,7 +24,40 @@ import math
 import re
 import hashlib
 
-import streamlit as st
+# --- STREAMLIT_OPTIONAL_SHIM ---
+# auto_exec is used both by Streamlit UI and by a headless runner.
+# When running headless, we MUST NOT import real Streamlit (even if installed),
+# because it emits ScriptRunContext warnings and session_state is non-functional.
+import os as _os
+_FORCE_HEADLESS = str(_os.getenv("ZTOCKLY_HEADLESS", "")).strip().lower() in ("1","true","yes","on")
+
+if not _FORCE_HEADLESS:
+    try:
+        import streamlit as st  # type: ignore
+    except Exception:
+        _FORCE_HEADLESS = True
+
+if _FORCE_HEADLESS:  # pragma: no cover
+    class _NoOpSidebar:
+        def warning(self, *args, **kwargs): 
+            return None
+        def info(self, *args, **kwargs): 
+            return None
+        def error(self, *args, **kwargs): 
+            return None
+
+    class _NoOpStreamlit:
+        secrets = {}
+        session_state = {}
+        sidebar = _NoOpSidebar()
+
+        def __getattr__(self, name):
+            def _noop(*args, **kwargs):
+                return None
+            return _noop
+
+    st = _NoOpStreamlit()
+# --- END STREAMLIT_OPTIONAL_SHIM ---
 
 from email_utils import send_email_alert
 from etrade_client import ETradeClient
