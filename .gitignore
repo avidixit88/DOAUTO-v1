@@ -1,6 +1,33 @@
-
+# --- secrets ---
 .env
+.env.*
+*.env
 
-
+# --- Streamlit ---
 .streamlit/
 
+# --- runtime state / caches ---
+state/
+*.json
+
+# --- Python / virtualenv ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+ENV/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# --- local backups / logs ---
+*.bak
+*.bak.*
+*.log
+_local_backups/
+
+# --- OS/editor ---
+.DS_Store
+Thumbs.db
